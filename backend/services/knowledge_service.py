@@ -3,25 +3,22 @@ import uuid
 import os
 from typing import List, Optional
 
-import chromadb
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models.knowledge import KnowledgeDocument, KnowledgeChunk
 from services.embedding_service import embedding_service
+from services.vector_store import SimpleVectorStore
 
 
 class KnowledgeService:
     def __init__(self):
-        self.chroma_client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="mission_navigator_kb",
-            metadata={"hnsw:space": "cosine"},
-        )
+        persist_path = os.path.join(settings.CHROMA_PERSIST_DIR, "vectors.json")
+        os.makedirs(settings.CHROMA_PERSIST_DIR, exist_ok=True)
+        self.collection = SimpleVectorStore(persist_path)
 
     def chunk_text(self, text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
-        """Split text into overlapping chunks, preferring paragraph boundaries."""
         if len(text) <= chunk_size:
             return [text]
 
@@ -36,7 +33,6 @@ class KnowledgeService:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
                 if len(para) > chunk_size:
-                    # Split long paragraphs by sentences
                     sentences = para.replace(". ", ".\n").split("\n")
                     current_chunk = ""
                     for sent in sentences:
@@ -55,87 +51,48 @@ class KnowledgeService:
         return [c for c in chunks if len(c.strip()) > 50]
 
     async def ingest_document(
-        self,
-        db: AsyncSession,
-        title: str,
-        category: str,
-        content: str,
-        url: Optional[str] = None,
-        phone: Optional[str] = None,
-        source: str = "manual",
-        chunk_type: str = "narrative",
+        self, db: AsyncSession, title: str, category: str, content: str,
+        url: Optional[str] = None, phone: Optional[str] = None,
+        source: str = "manual", chunk_type: str = "narrative",
     ) -> KnowledgeDocument:
-        """Ingest a document: save to DB, chunk, embed, store in ChromaDB."""
-        # Save document to relational DB
         doc = KnowledgeDocument(
-            title=title,
-            category=category,
-            content=content,
-            url=url,
-            phone=phone,
-            source=source,
+            title=title, category=category, content=content,
+            url=url, phone=phone, source=source,
         )
         db.add(doc)
         await db.flush()
 
-        # Chunk the content
         text_chunks = self.chunk_text(content)
-
-        # Embed all chunks
         embeddings = embedding_service.embed_batch(text_chunks)
 
-        # Store chunks in DB and ChromaDB
-        chunk_ids = []
         for i, (text, embedding) in enumerate(zip(text_chunks, embeddings)):
             chunk_id = str(uuid.uuid4())
-            chunk_ids.append(chunk_id)
+            metadata = {
+                "document_id": str(doc.id),
+                "title": title,
+                "category": category,
+                "chunk_type": chunk_type,
+                "url": url or "",
+                "phone": phone or "",
+                "source": source,
+            }
 
-            # Save to relational DB
             chunk = KnowledgeChunk(
-                id=chunk_id,
-                document_id=doc.id,
-                content=text,
-                chunk_type=chunk_type,
-                chunk_index=i,
-                metadata_json=json.dumps({
-                    "title": title,
-                    "category": category,
-                    "url": url,
-                    "phone": phone,
-                }),
+                id=chunk_id, document_id=doc.id, content=text,
+                chunk_type=chunk_type, chunk_index=i,
+                metadata_json=json.dumps(metadata),
             )
             db.add(chunk)
-
-            # Save to ChromaDB
-            self.collection.add(
-                ids=[chunk_id],
-                embeddings=[embedding],
-                documents=[text],
-                metadatas=[{
-                    "document_id": str(doc.id),
-                    "title": title,
-                    "category": category,
-                    "chunk_type": chunk_type,
-                    "url": url or "",
-                    "phone": phone or "",
-                    "source": source,
-                }],
-            )
+            self.collection.add(chunk_id, embedding, text, metadata)
 
         await db.commit()
         return doc
 
     async def update_document(
-        self,
-        db: AsyncSession,
-        doc_id: int,
-        title: Optional[str] = None,
-        category: Optional[str] = None,
-        content: Optional[str] = None,
-        url: Optional[str] = None,
-        phone: Optional[str] = None,
+        self, db: AsyncSession, doc_id: int,
+        title: Optional[str] = None, category: Optional[str] = None,
+        content: Optional[str] = None, url: Optional[str] = None, phone: Optional[str] = None,
     ) -> Optional[KnowledgeDocument]:
-        """Update a document and re-embed if content changed."""
         result = await db.execute(select(KnowledgeDocument).where(KnowledgeDocument.id == doc_id))
         doc = result.scalar_one_or_none()
         if not doc:
@@ -143,103 +100,66 @@ class KnowledgeService:
 
         content_changed = content is not None and content != doc.content
 
-        if title is not None:
-            doc.title = title
-        if category is not None:
-            doc.category = category
-        if content is not None:
-            doc.content = content
-        if url is not None:
-            doc.url = url
-        if phone is not None:
-            doc.phone = phone
+        if title is not None: doc.title = title
+        if category is not None: doc.category = category
+        if content is not None: doc.content = content
+        if url is not None: doc.url = url
+        if phone is not None: doc.phone = phone
 
         if content_changed:
-            # Delete old chunks from ChromaDB
             old_chunks = await db.execute(
                 select(KnowledgeChunk).where(KnowledgeChunk.document_id == doc_id)
             )
             old_chunk_ids = [c.id for c in old_chunks.scalars().all()]
             if old_chunk_ids:
-                self.collection.delete(ids=old_chunk_ids)
+                self.collection.delete(old_chunk_ids)
+            for cid in old_chunk_ids:
+                cr = await db.execute(select(KnowledgeChunk).where(KnowledgeChunk.id == cid))
+                c = cr.scalar_one_or_none()
+                if c: await db.delete(c)
 
-            # Delete old chunks from DB
-            for chunk_id in old_chunk_ids:
-                chunk_result = await db.execute(
-                    select(KnowledgeChunk).where(KnowledgeChunk.id == chunk_id)
-                )
-                chunk = chunk_result.scalar_one_or_none()
-                if chunk:
-                    await db.delete(chunk)
-
-            # Re-chunk and re-embed
             text_chunks = self.chunk_text(doc.content)
             embeddings = embedding_service.embed_batch(text_chunks)
-
             for i, (text, embedding) in enumerate(zip(text_chunks, embeddings)):
                 chunk_id = str(uuid.uuid4())
+                metadata = {
+                    "document_id": str(doc.id), "title": doc.title,
+                    "category": doc.category, "chunk_type": "narrative",
+                    "url": doc.url or "", "phone": doc.phone or "", "source": doc.source,
+                }
                 chunk = KnowledgeChunk(
-                    id=chunk_id,
-                    document_id=doc.id,
-                    content=text,
-                    chunk_type="narrative",
-                    chunk_index=i,
-                    metadata_json=json.dumps({
-                        "title": doc.title,
-                        "category": doc.category,
-                        "url": doc.url,
-                        "phone": doc.phone,
-                    }),
+                    id=chunk_id, document_id=doc.id, content=text,
+                    chunk_type="narrative", chunk_index=i,
+                    metadata_json=json.dumps(metadata),
                 )
                 db.add(chunk)
-                self.collection.add(
-                    ids=[chunk_id],
-                    embeddings=[embedding],
-                    documents=[text],
-                    metadatas=[{
-                        "document_id": str(doc.id),
-                        "title": doc.title,
-                        "category": doc.category,
-                        "chunk_type": "narrative",
-                        "url": doc.url or "",
-                        "phone": doc.phone or "",
-                        "source": doc.source,
-                    }],
-                )
+                self.collection.add(chunk_id, embedding, text, metadata)
 
         await db.commit()
         return doc
 
     async def delete_document(self, db: AsyncSession, doc_id: int) -> bool:
-        """Delete a document and its chunks from both DB and ChromaDB."""
         result = await db.execute(select(KnowledgeDocument).where(KnowledgeDocument.id == doc_id))
         doc = result.scalar_one_or_none()
         if not doc:
             return False
-
-        # Get chunk IDs for ChromaDB deletion
         chunks_result = await db.execute(
             select(KnowledgeChunk).where(KnowledgeChunk.document_id == doc_id)
         )
         chunk_ids = [c.id for c in chunks_result.scalars().all()]
-
         if chunk_ids:
-            self.collection.delete(ids=chunk_ids)
-
+            self.collection.delete(chunk_ids)
         await db.delete(doc)
         await db.commit()
         return True
 
     async def get_documents(self, db: AsyncSession, skip: int = 0, limit: int = 50):
-        """Get all documents with chunk counts."""
         result = await db.execute(
             select(KnowledgeDocument).order_by(KnowledgeDocument.updated_at.desc()).offset(skip).limit(limit)
         )
         docs = result.scalars().all()
-
         total_result = await db.execute(select(func.count(KnowledgeDocument.id)))
         total = total_result.scalar()
-
         return docs, total
 
     async def get_document(self, db: AsyncSession, doc_id: int):

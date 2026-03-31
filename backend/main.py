@@ -18,6 +18,22 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
     print(f"Mission Navigator started in {settings.ENVIRONMENT} mode")
+
+    # Auto-ingest knowledge base if empty
+    from services.knowledge_service import knowledge_service
+    if knowledge_service.get_collection_count() == 0 and settings.GEMINI_API_KEY:
+        print("Knowledge base empty - running auto-ingestion...")
+        try:
+            import subprocess
+            subprocess.run(
+                ["python3", "scripts/ingest_bridge_guide.py"],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                check=True,
+            )
+            print(f"Ingestion complete: {knowledge_service.get_collection_count()} chunks")
+        except Exception as e:
+            print(f"Auto-ingestion failed: {e}")
+
     yield
     # Shutdown
     print("Mission Navigator shutting down")
