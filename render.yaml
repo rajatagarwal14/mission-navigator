@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: mission-navigator
+    runtime: python
+    buildCommand: "chmod +x build.sh && ./build.sh"
+    startCommand: "cd backend && python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///./mission_navigator.db
+      - key: CHROMA_PERSIST_DIR
+        value: ./chroma_data
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.13.0"
+      - key: NODE_VERSION
+        value: "20.11.0"
