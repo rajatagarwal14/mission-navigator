@@ -15,8 +15,8 @@ venv/
 *.db
 *.sqlite3
 
-# ChromaDB
-chroma_data/
+# ChromaDB (keep vectors.json for deployment)
+# chroma_data/
 
 # Node
 node_modules/
