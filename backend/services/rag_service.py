@@ -31,16 +31,38 @@ class RAGService:
 
         return best_category if best_count > 0 else None
 
+    STOP_WORDS = {
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+        "on", "with", "at", "by", "from", "as", "into", "through", "during",
+        "before", "after", "above", "below", "between", "out", "off", "over",
+        "under", "again", "further", "then", "once", "here", "there", "when",
+        "where", "why", "how", "all", "each", "every", "both", "few", "more",
+        "most", "other", "some", "such", "no", "nor", "not", "only", "own",
+        "same", "so", "than", "too", "very", "just", "because", "but", "and",
+        "or", "if", "while", "about", "up", "what", "which", "who", "whom",
+        "this", "that", "these", "those", "i", "me", "my", "we", "our", "you",
+        "your", "he", "she", "it", "they", "them", "his", "her", "its",
+        "help", "get", "need", "want", "like", "know", "tell", "please",
+        "hi", "hello", "hey", "thanks", "thank", "yes", "no", "ok", "okay",
+    }
+
     def _keyword_fallback(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
         """Fallback keyword-based search when embedding API is unavailable."""
         query_lower = query.lower()
-        words = set(query_lower.split())
+        # Filter out stop words to get meaningful search terms
+        words = {w for w in query_lower.split() if w not in self.STOP_WORDS and len(w) > 2}
+
+        if not words:
+            return []
+
         scored = []
         for id, entry in knowledge_service.collection.vectors.items():
             doc_lower = entry["document"].lower()
             title_lower = entry["metadata"].get("title", "").lower()
-            # Score based on word matches
-            score = sum(2 for w in words if w in title_lower) + sum(1 for w in words if w in doc_lower)
+            # Score: title matches worth 3x, document matches worth 1x
+            score = sum(3 for w in words if w in title_lower) + sum(1 for w in words if w in doc_lower)
             if score > 0:
                 scored.append({
                     "chunk_id": id,

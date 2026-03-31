@@ -16,6 +16,23 @@ from schemas.chat import ResourceInfo
 
 
 class ChatService:
+    GREETING_PATTERNS = {
+        "hi", "hello", "hey", "howdy", "greetings", "good morning", "good afternoon",
+        "good evening", "what's up", "whats up", "sup", "yo", "hola",
+        "hi there", "hello there", "hey there", "thanks", "thank you",
+        "bye", "goodbye", "see you", "ok", "okay", "got it",
+    }
+
+    def _is_greeting(self, message: str) -> bool:
+        """Check if a message is a simple greeting/pleasantry that doesn't need RAG."""
+        text = message.lower().strip().rstrip("!?.,:;")
+        if text in self.GREETING_PATTERNS:
+            return True
+        # Short messages that are likely greetings
+        if len(text.split()) <= 3 and any(g in text for g in ["hi", "hello", "hey", "thanks", "thank"]):
+            return True
+        return False
+
     async def get_or_create_session(self, db: AsyncSession, session_id: str, source: str = "widget") -> ChatSession:
         """Get existing session or create a new one."""
         result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
@@ -69,10 +86,16 @@ class ChatService:
             await db.commit()
             return response, [], None
 
-        # Layer 2: RAG retrieval
-        chunks = rag_service.retrieve(message, n_results=5)
-        context = rag_service.format_context(chunks)
-        resource_infos = rag_service.extract_resource_info(chunks)
+        # Check for greetings - respond warmly without RAG search
+        if self._is_greeting(message):
+            chunks = []
+            context = ""
+            resource_infos = []
+        else:
+            # Layer 2: RAG retrieval
+            chunks = rag_service.retrieve(message, n_results=5)
+            context = rag_service.format_context(chunks)
+            resource_infos = rag_service.extract_resource_info(chunks)
 
         # Get conversation history
         history = await self.get_conversation_history(db, session_id)
@@ -157,10 +180,15 @@ class ChatService:
             yield {"event": "done", "data": ""}
             return
 
-        # RAG
-        chunks = rag_service.retrieve(message, n_results=5)
-        context = rag_service.format_context(chunks)
-        resource_infos = rag_service.extract_resource_info(chunks)
+        # RAG (skip for greetings)
+        if self._is_greeting(message):
+            chunks = []
+            context = ""
+            resource_infos = []
+        else:
+            chunks = rag_service.retrieve(message, n_results=5)
+            context = rag_service.format_context(chunks)
+            resource_infos = rag_service.extract_resource_info(chunks)
 
         # Send resources first
         if resource_infos:
