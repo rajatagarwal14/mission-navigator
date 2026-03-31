@@ -31,22 +31,40 @@ class RAGService:
 
         return best_category if best_count > 0 else None
 
+    def _keyword_fallback(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """Fallback keyword-based search when embedding API is unavailable."""
+        query_lower = query.lower()
+        words = set(query_lower.split())
+        scored = []
+        for id, entry in knowledge_service.collection.vectors.items():
+            doc_lower = entry["document"].lower()
+            title_lower = entry["metadata"].get("title", "").lower()
+            # Score based on word matches
+            score = sum(2 for w in words if w in title_lower) + sum(1 for w in words if w in doc_lower)
+            if score > 0:
+                scored.append({
+                    "chunk_id": id,
+                    "content": entry["document"],
+                    "metadata": entry["metadata"],
+                    "similarity": min(score / 10, 1.0),
+                    "final_score": min(score / 10, 1.0),
+                })
+        scored.sort(key=lambda x: x["final_score"], reverse=True)
+        return scored[:n_results]
+
     def retrieve(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
         """Retrieve relevant chunks for a query using vector similarity + metadata boosting."""
-        # Embed the query
-        query_embedding = embedding_service.embed_query(query)
+        # Try to embed the query; fall back to keyword search if API unavailable
+        try:
+            query_embedding = embedding_service.embed_query(query)
+        except Exception as e:
+            print(f"Embedding failed, using keyword fallback: {e}")
+            return self._keyword_fallback(query, n_results)
 
         # Detect category for metadata boosting
         detected_category = self.detect_category(query)
 
-        # Query ChromaDB for more candidates than needed (we'll re-rank)
         candidates_count = min(n_results * 2, 15)
-
-        # Build where filter if we detect a specific category
-        where_filter = None
-        if detected_category:
-            # Don't hard-filter; we'll boost instead. But for crisis, always include crisis chunks.
-            pass
 
         results = knowledge_service.collection.query(
             query_embedding=query_embedding,
@@ -54,7 +72,7 @@ class RAGService:
         )
 
         if not results or not results["ids"] or not results["ids"][0]:
-            return []
+            return self._keyword_fallback(query, n_results)
 
         # Build candidate list with scores
         candidates = []
