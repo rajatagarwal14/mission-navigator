@@ -49,9 +49,8 @@ class RAGService:
             pass
 
         results = knowledge_service.collection.query(
-            query_embeddings=[query_embedding],
+            query_embedding=query_embedding,
             n_results=candidates_count,
-            include=["documents", "metadatas", "distances"],
         )
 
         if not results or not results["ids"] or not results["ids"][0]:
