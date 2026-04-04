@@ -29,12 +29,35 @@ async def lifespan(app: FastAPI):
             result = await db.execute(select(StaffUser).where(StaffUser.username == settings.ADMIN_USERNAME))
             if not result.scalar_one_or_none():
                 hashed = bcrypt.hashpw(settings.ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
-                admin = StaffUser(username=settings.ADMIN_USERNAME, hashed_password=hashed, role="admin", is_active=True)
+                admin = StaffUser(username=settings.ADMIN_USERNAME, password_hash=hashed, full_name="Administrator", role="admin")
                 db.add(admin)
                 await db.commit()
                 print(f"Admin user '{settings.ADMIN_USERNAME}' created")
     except Exception as e:
         print(f"Admin seed skipped: {e}")
+
+    # Seed demo historical data if SEED_DEMO_DATA=true and DB is empty
+    if os.environ.get("SEED_DEMO_DATA") == "true":
+        try:
+            from sqlalchemy import select, func
+            from models.analytics import QueryLog
+            from database import async_session as _async_session
+            async with _async_session() as _db:
+                result = await _db.execute(select(func.count(QueryLog.id)))
+                log_count = result.scalar() or 0
+            if log_count < 10:
+                print("Seeding demo historical data...")
+                import subprocess
+                subprocess.run(
+                    ["python3", "scripts/seed_historical_data_internal.py"],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    check=True,
+                )
+                print("Demo data seeded successfully")
+            else:
+                print(f"Demo data already present ({log_count} logs) — skipping seed")
+        except Exception as e:
+            print(f"Demo data seed skipped: {e}")
 
     # Auto-ingest knowledge base if empty
     from services.knowledge_service import knowledge_service
