@@ -19,6 +19,23 @@ async def lifespan(app: FastAPI):
     await init_db()
     print(f"Mission Navigator started in {settings.ENVIRONMENT} mode")
 
+    # Auto-seed admin user if not exists
+    try:
+        from database import async_session
+        from sqlalchemy import select
+        from models.user import StaffUser
+        import bcrypt
+        async with async_session() as db:
+            result = await db.execute(select(StaffUser).where(StaffUser.username == settings.ADMIN_USERNAME))
+            if not result.scalar_one_or_none():
+                hashed = bcrypt.hashpw(settings.ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
+                admin = StaffUser(username=settings.ADMIN_USERNAME, hashed_password=hashed, role="admin", is_active=True)
+                db.add(admin)
+                await db.commit()
+                print(f"Admin user '{settings.ADMIN_USERNAME}' created")
+    except Exception as e:
+        print(f"Admin seed skipped: {e}")
+
     # Auto-ingest knowledge base if empty
     from services.knowledge_service import knowledge_service
     if knowledge_service.get_collection_count() == 0 and settings.GEMINI_API_KEY:

@@ -8,8 +8,19 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
-    # Database
+    # Database (SQLite for local dev, PostgreSQL for production)
     DATABASE_URL: str = "sqlite+aiosqlite:///./mission_navigator.db"
+
+    @property
+    def async_database_url(self) -> str:
+        """Return async-compatible database URL."""
+        url = self.DATABASE_URL
+        # Convert postgres:// or postgresql:// to asyncpg driver
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
 
     # ChromaDB
     CHROMA_PERSIST_DIR: str = "./chroma_data"

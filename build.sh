@@ -23,11 +23,11 @@ sys.path.insert(0, '.')
 from database import init_db
 asyncio.run(init_db())
 print('Database initialized')
-"
+" || echo "DB init skipped (will init on startup)"
 
 # Seed admin
 echo "[4/5] Seeding admin user..."
-python3 scripts/seed_admin.py 2>/dev/null || echo "Admin exists"
+python3 scripts/seed_admin.py 2>/dev/null || echo "Admin exists or will be seeded on startup"
 
 # Ingest knowledge base during build
 echo "[5/5] Ingesting knowledge base..."
