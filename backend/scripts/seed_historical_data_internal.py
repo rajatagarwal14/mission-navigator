@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import async_session, init_db
 from models.conversation import ChatSession, ChatMessage
 from models.analytics import QueryLog, ResourceClick
+from models.intake import IntakeSession
 
 VETERAN_QUESTIONS = [
     "What mental health services does Road Home offer?",
@@ -194,6 +195,124 @@ async def seed():
 
         print(f"Seeded: {total['sessions']} sessions, {total['messages']} messages, "
               f"{total['logs']} logs, {total['clicks']} clicks")
+
+        # Seed intake submissions
+        await _seed_intake(db, now, total)
+        print(f"Intake submissions seeded: {total.get('intake', 0)}")
+
+
+INTAKE_SUMMARIES = [
+    {
+        "connection": "veteran", "branch": "Army", "era": "Post-9/11 (OEF/OIF)",
+        "concerns": "PTSD and sleep difficulties following two combat deployments to Afghanistan",
+        "location": "Illinois", "urgency": "moderate", "family": "spouse and two children",
+    },
+    {
+        "connection": "family_member", "branch": "N/A", "era": "N/A",
+        "concerns": "Supporting husband who served in the Marine Corps and is struggling with anger and isolation",
+        "location": "Illinois", "urgency": "high", "family": "married with children",
+    },
+    {
+        "connection": "veteran", "branch": "Navy", "era": "Gulf War",
+        "concerns": "Depression, survivor's guilt, and difficulty reintegrating into civilian life",
+        "location": "Indiana", "urgency": "moderate", "family": "single",
+    },
+    {
+        "connection": "veteran", "branch": "Air Force", "era": "Post-9/11",
+        "concerns": "MST-related trauma and anxiety affecting work and relationships",
+        "location": "Illinois", "urgency": "high", "family": "partner",
+    },
+    {
+        "connection": "caregiver", "branch": "N/A", "era": "N/A",
+        "concerns": "Caring for a Vietnam veteran parent with PTSD and dementia, seeking respite and support",
+        "location": "Illinois", "urgency": "moderate", "family": "adult child caregiver",
+    },
+    {
+        "connection": "veteran", "branch": "Marines", "era": "Post-9/11 (OEF/OIF)",
+        "concerns": "TBI-related symptoms combined with PTSD, having difficulty maintaining employment",
+        "location": "Wisconsin", "urgency": "high", "family": "spouse",
+    },
+    {
+        "connection": "veteran", "branch": "Army National Guard", "era": "Post-9/11",
+        "concerns": "Anxiety, hypervigilance, and nightmares since returning from Iraq deployment",
+        "location": "Illinois", "urgency": "low", "family": "married with children",
+    },
+    {
+        "connection": "family_member", "branch": "N/A", "era": "N/A",
+        "concerns": "Son recently returned from Afghanistan and is withdrawn, drinking heavily",
+        "location": "Illinois", "urgency": "high", "family": "parent of veteran",
+    },
+    {
+        "connection": "veteran", "branch": "Coast Guard", "era": "Vietnam",
+        "concerns": "Long-untreated PTSD, recurring flashbacks, and social isolation",
+        "location": "Illinois", "urgency": "moderate", "family": "widowed",
+    },
+    {
+        "connection": "veteran", "branch": "Army", "era": "Post-9/11",
+        "concerns": "Transitioning out of active duty, struggling with identity and purpose",
+        "location": "Illinois", "urgency": "low", "family": "engaged, no children yet",
+    },
+    {
+        "connection": "veteran", "branch": "Marines", "era": "Gulf War",
+        "concerns": "Chronic pain and PTSD, previous suicide attempt two years ago",
+        "location": "Illinois", "urgency": "high", "family": "divorced, children nearby",
+    },
+    {
+        "connection": "family_member", "branch": "N/A", "era": "N/A",
+        "concerns": "Wife of active duty service member dealing with deployment stress and anxiety",
+        "location": "Illinois", "urgency": "moderate", "family": "two young children",
+    },
+]
+
+
+def _make_summary(d: dict) -> str:
+    return (
+        f"**Connection to Service:** {d['connection'].replace('_', ' ').title()}\n"
+        f"**Branch:** {d['branch']}\n"
+        f"**Service Era:** {d['era']}\n"
+        f"**Primary Concerns:** {d['concerns']}\n"
+        f"**Location (State):** {d['location']}\n"
+        f"**Urgency:** {d['urgency'].title()}\n"
+        f"**Family Situation:** {d['family'].title()}\n"
+        f"**Preferred Contact:** Phone call in the morning"
+    )
+
+
+async def _seed_intake(db: AsyncSession, now: datetime, total: dict):
+    total["intake"] = 0
+    for i, info in enumerate(INTAKE_SUMMARIES):
+        days_back = random.randint(1, 29)
+        submitted = now - timedelta(days=days_back, hours=random.randint(0, 8),
+                                     minutes=random.randint(0, 59))
+        reviewed = i < 8  # first 8 are reviewed, rest pending
+
+        session_id = str(uuid.uuid4())
+        # Create a matching chat session for intake
+        chat_sess = ChatSession(
+            id=session_id,
+            started_at=submitted - timedelta(minutes=random.randint(5, 20)),
+            last_activity=submitted,
+            message_count=random.randint(8, 16),
+            crisis_flagged=False,
+            source="intake",
+        )
+        db.add(chat_sess)
+
+        intake = IntakeSession(
+            id=str(uuid.uuid4()),
+            chat_session_id=session_id,
+            state="COMPLETED",
+            collected_data=json.dumps(info),
+            summary=_make_summary(info),
+            consent_given=True,
+            submitted_at=submitted,
+            reviewed_at=submitted + timedelta(hours=random.randint(2, 48)) if reviewed else None,
+            created_at=submitted - timedelta(minutes=random.randint(5, 20)),
+        )
+        db.add(intake)
+        total["intake"] = i + 1
+
+    await db.commit()
 
 
 if __name__ == "__main__":
