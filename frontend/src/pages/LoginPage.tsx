@@ -13,6 +13,8 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError('');
+    // Clear any stale token before logging in
+    localStorage.removeItem('mn_token');
     try {
       await login(username, password);
       navigate('/admin/dashboard');

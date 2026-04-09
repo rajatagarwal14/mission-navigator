@@ -9,17 +9,36 @@ import TopResourcesTable from '../components/dashboard/TopResourcesTable';
 export default function DashboardPage() {
   const [data, setData] = useState<AnalyticsDashboard | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
 
   useEffect(() => {
     setLoading(true);
-    getDashboard(days).then(setData).catch(console.error).finally(() => setLoading(false));
+    setError(null);
+    getDashboard(days)
+      .then(setData)
+      .catch((e) => setError(e.message || 'Failed to load dashboard'))
+      .finally(() => setLoading(false));
   }, [days]);
 
-  if (loading || !data) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="animate-spin w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full" />
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4">
+        <p className="text-red-500 text-sm">{error || 'No data available'}</p>
+        <button
+          onClick={() => { setLoading(true); setError(null); getDashboard(days).then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false)); }}
+          className="px-4 py-2 bg-[#1B2A4A] text-white rounded-lg text-sm"
+        >
+          Retry
+        </button>
       </div>
     );
   }
