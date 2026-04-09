@@ -6,8 +6,6 @@ import IntakePage from './pages/IntakePage';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import KnowledgePage from './pages/KnowledgePage';
-import IntakeAdminPage from './pages/IntakeAdminPage';
-
 export default function App() {
   return (
     <Routes>
@@ -30,14 +28,6 @@ export default function App() {
         element={
           <ProtectedRoute>
             <Layout><KnowledgePage /></Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/admin/intake"
-        element={
-          <ProtectedRoute>
-            <Layout><IntakeAdminPage /></Layout>
           </ProtectedRoute>
         }
       />

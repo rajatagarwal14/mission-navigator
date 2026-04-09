@@ -12,7 +12,6 @@ export default function Layout({ children }: { children: ReactNode }) {
   const navItems = [
     { path: '/admin/dashboard', label: 'Dashboard' },
     { path: '/admin/knowledge', label: 'Knowledge Base' },
-    { path: '/admin/intake', label: 'Intake Submissions' },
   ];
 
   return (
