@@ -33,13 +33,21 @@ class ChatService:
             return True
         return False
 
-    async def get_or_create_session(self, db: AsyncSession, session_id: str, source: str = "widget") -> ChatSession:
+    async def get_or_create_session(
+        self, db: AsyncSession, session_id: str,
+        source: str = "widget", ip_address: str = None, user_agent: str = None
+    ) -> ChatSession:
         """Get existing session or create a new one."""
         result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
         session = result.scalar_one_or_none()
 
         if not session:
-            session = ChatSession(id=session_id, source=source)
+            session = ChatSession(
+                id=session_id,
+                source=source,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
             db.add(session)
             await db.flush()
 
@@ -57,13 +65,14 @@ class ChatService:
         return [{"role": m.role, "content": m.content} for m in messages]
 
     async def process_message(
-        self, db: AsyncSession, session_id: str, message: str, source: str = "widget"
+        self, db: AsyncSession, session_id: str, message: str,
+        source: str = "widget", ip_address: str = None, user_agent: str = None
     ) -> Tuple[str, List[ResourceInfo], Optional[int]]:
         """Process a user message through the full pipeline. Returns (response, resources, crisis_tier)."""
         start_time = time.time()
 
         # Get or create session
-        session = await self.get_or_create_session(db, session_id, source)
+        session = await self.get_or_create_session(db, session_id, source, ip_address, user_agent)
 
         # Layer 1: Crisis detection (pre-LLM)
         crisis_tier, crisis_response = safety_service.check_crisis(message)
@@ -149,12 +158,13 @@ class ChatService:
         return response, resources, crisis_tier
 
     async def process_message_stream(
-        self, db: AsyncSession, session_id: str, message: str, source: str = "widget"
+        self, db: AsyncSession, session_id: str, message: str,
+        source: str = "widget", ip_address: str = None, user_agent: str = None
     ) -> AsyncGenerator[dict, None]:
         """Process a message with streaming response. Yields events."""
         start_time = time.time()
 
-        session = await self.get_or_create_session(db, session_id, source)
+        session = await self.get_or_create_session(db, session_id, source, ip_address, user_agent)
 
         # Crisis detection
         crisis_tier, crisis_response = safety_service.check_crisis(message)

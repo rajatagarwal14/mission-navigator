@@ -13,6 +13,7 @@ class ChatSession(Base):
     message_count = Column(Integer, default=0)
     crisis_flagged = Column(Boolean, default=False)
     user_agent = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
     source = Column(String, default="widget")
 
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")

@@ -1,5 +1,5 @@
 import json
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,15 +12,34 @@ from models.conversation import ChatMessage
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract real client IP from request headers."""
+    # Check forwarded headers (Cloudflare, proxies)
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip
+    return request.client.host if request.client else "unknown"
+
+
 @router.post("", response_model=ChatResponse)
-async def send_message(request: ChatRequest, db: AsyncSession = Depends(get_db)):
+async def send_message(request: ChatRequest, req: Request, db: AsyncSession = Depends(get_db)):
     """Send a message and get a complete response."""
+    ip = _get_client_ip(req)
+    ua = req.headers.get("user-agent", "")
     try:
         response_text, resources, crisis_tier = await chat_service.process_message(
             db=db,
             session_id=request.session_id,
             message=request.message,
             source=request.source,
+            ip_address=ip,
+            user_agent=ua,
         )
     except Exception as e:
         # Graceful fallback if LLM fails
@@ -51,18 +70,24 @@ async def send_message(request: ChatRequest, db: AsyncSession = Depends(get_db))
 
 @router.get("/stream")
 async def stream_message(
+    request: Request,
     session_id: str = Query(...),
     message: str = Query(...),
     source: str = Query(default="widget"),
     db: AsyncSession = Depends(get_db),
 ):
     """Stream a response via Server-Sent Events."""
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent", "")
+
     async def event_generator():
         async for event in chat_service.process_message_stream(
             db=db,
             session_id=session_id,
             message=message,
             source=source,
+            ip_address=ip,
+            user_agent=ua,
         ):
             event_type = event["event"]
             data = event["data"]

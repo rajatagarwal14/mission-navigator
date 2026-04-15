@@ -19,6 +19,26 @@ async def lifespan(app: FastAPI):
     await init_db()
     print(f"Mission Navigator started in {settings.ENVIRONMENT} mode")
 
+    # Safe schema migrations (add new columns if missing)
+    try:
+        from database import engine
+        from sqlalchemy import text
+        async with engine.begin() as conn:
+            # Add ip_address to chat_sessions if not exists
+            if "postgresql" in str(engine.url):
+                await conn.execute(text(
+                    "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS ip_address VARCHAR;"
+                ))
+            else:
+                # SQLite doesn't support IF NOT EXISTS for columns
+                try:
+                    await conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN ip_address VARCHAR;"))
+                except Exception:
+                    pass  # Column already exists
+        print("Schema migration check complete")
+    except Exception as e:
+        print(f"Schema migration skipped: {e}")
+
     # Auto-seed admin user if not exists
     try:
         from database import async_session
