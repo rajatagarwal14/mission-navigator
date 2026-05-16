@@ -18,12 +18,19 @@ async def lifespan(app: FastAPI):
     # Startup — every step wrapped so nothing can crash the server
     print("Mission Navigator starting up...")
 
-    # 1. Init DB tables
-    try:
-        await init_db()
-        print("DB tables ready")
-    except Exception as e:
-        print(f"DB init warning (non-fatal): {e}")
+    # 1. Init DB tables — retry until PostgreSQL wakes up (free tier sleeps too)
+    import asyncio
+    for attempt in range(1, 11):
+        try:
+            await init_db()
+            print(f"DB tables ready (attempt {attempt})")
+            break
+        except Exception as e:
+            print(f"DB not ready yet (attempt {attempt}/10): {e}")
+            if attempt < 10:
+                await asyncio.sleep(3)
+            else:
+                print("WARNING: DB init failed after 10 attempts — service may be degraded")
 
     print(f"Environment: {settings.ENVIRONMENT}")
 
