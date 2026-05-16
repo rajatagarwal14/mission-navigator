@@ -153,6 +153,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Global exception handler — return JSON with error detail instead of plain-text 500
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: _Request, exc: Exception):
+    import traceback
+    tb = traceback.format_exc()
+    print(f"Unhandled exception on {request.url}: {exc}\n{tb}")
+    return _JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "type": type(exc).__name__},
+    )
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
