@@ -79,20 +79,26 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"Demo data seed skipped: {e}")
 
-    # Auto-ingest knowledge base if empty
+    # Auto-ingest knowledge base if empty — run in background so startup is not blocked
     from services.knowledge_service import knowledge_service
     if knowledge_service.get_collection_count() == 0 and settings.GEMINI_API_KEY:
-        print("Knowledge base empty - running auto-ingestion...")
-        try:
-            import subprocess
-            subprocess.run(
-                ["python3", "scripts/ingest_bridge_guide.py"],
-                cwd=os.path.dirname(os.path.abspath(__file__)),
-                check=True,
-            )
-            print(f"Ingestion complete: {knowledge_service.get_collection_count()} chunks")
-        except Exception as e:
-            print(f"Auto-ingestion failed: {e}")
+        print("Knowledge base empty - scheduling background ingestion...")
+        import threading
+        import subprocess as _sp
+        _backend_dir = os.path.dirname(os.path.abspath(__file__))
+        def _ingest():
+            try:
+                _sp.run(
+                    ["python3", "scripts/ingest_bridge_guide.py"],
+                    cwd=_backend_dir,
+                    check=True,
+                )
+                print(f"Background ingestion complete: {knowledge_service.get_collection_count()} chunks")
+            except Exception as exc:
+                print(f"Background ingestion failed: {exc}")
+        threading.Thread(target=_ingest, daemon=True).start()
+    else:
+        print(f"Knowledge base ready: {knowledge_service.get_collection_count()} chunks")
 
     yield
     # Shutdown
