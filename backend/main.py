@@ -15,31 +15,37 @@ from database import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    await init_db()
-    print(f"Mission Navigator started in {settings.ENVIRONMENT} mode")
+    # Startup — every step wrapped so nothing can crash the server
+    print("Mission Navigator starting up...")
 
-    # Safe schema migrations (add new columns if missing)
+    # 1. Init DB tables
+    try:
+        await init_db()
+        print("DB tables ready")
+    except Exception as e:
+        print(f"DB init warning (non-fatal): {e}")
+
+    print(f"Environment: {settings.ENVIRONMENT}")
+
+    # 2. Schema migrations — add new columns safely
     try:
         from database import engine
         from sqlalchemy import text
         async with engine.begin() as conn:
-            # Add ip_address to chat_sessions if not exists
             if "postgresql" in str(engine.url):
                 await conn.execute(text(
                     "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS ip_address VARCHAR;"
                 ))
             else:
-                # SQLite doesn't support IF NOT EXISTS for columns
                 try:
                     await conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN ip_address VARCHAR;"))
                 except Exception:
-                    pass  # Column already exists
-        print("Schema migration check complete")
+                    pass
+        print("Schema migration OK")
     except Exception as e:
-        print(f"Schema migration skipped: {e}")
+        print(f"Schema migration skipped (non-fatal): {e}")
 
-    # Auto-seed admin user if not exists
+    # 3. Auto-seed admin user
     try:
         from database import async_session
         from sqlalchemy import select
@@ -49,59 +55,75 @@ async def lifespan(app: FastAPI):
             result = await db.execute(select(StaffUser).where(StaffUser.username == settings.ADMIN_USERNAME))
             if not result.scalar_one_or_none():
                 hashed = bcrypt.hashpw(settings.ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
-                admin = StaffUser(username=settings.ADMIN_USERNAME, password_hash=hashed, full_name="Administrator", role="admin")
+                admin = StaffUser(
+                    username=settings.ADMIN_USERNAME,
+                    password_hash=hashed,
+                    full_name="Administrator",
+                    role="admin",
+                )
                 db.add(admin)
                 await db.commit()
-                print(f"Admin user '{settings.ADMIN_USERNAME}' created")
+                print(f"Admin user created")
     except Exception as e:
-        print(f"Admin seed skipped: {e}")
+        print(f"Admin seed skipped (non-fatal): {e}")
 
-    # Seed demo historical data if SEED_DEMO_DATA=true and DB is empty
-    if os.environ.get("SEED_DEMO_DATA") == "true":
-        try:
-            from sqlalchemy import select, func
-            from models.analytics import QueryLog
-            from database import async_session as _async_session
-            async with _async_session() as _db:
-                result = await _db.execute(select(func.count(QueryLog.id)))
-                log_count = result.scalar() or 0
-            if log_count < 10:
-                print("Seeding demo historical data...")
-                import subprocess
-                subprocess.run(
-                    ["python3", "scripts/seed_historical_data_internal.py"],
-                    cwd=os.path.dirname(os.path.abspath(__file__)),
-                    check=True,
-                )
-                print("Demo data seeded successfully")
-            else:
-                print(f"Demo data already present ({log_count} logs) — skipping seed")
-        except Exception as e:
-            print(f"Demo data seed skipped: {e}")
+    # 4. Background tasks (seeding + ingestion) — never block startup
+    import threading
 
-    # Auto-ingest knowledge base if empty — run in background so startup is not blocked
-    from services.knowledge_service import knowledge_service
-    if knowledge_service.get_collection_count() == 0 and settings.GEMINI_API_KEY:
-        print("Knowledge base empty - scheduling background ingestion...")
-        import threading
-        import subprocess as _sp
-        _backend_dir = os.path.dirname(os.path.abspath(__file__))
-        def _ingest():
+    def _background_startup():
+        import time
+        time.sleep(5)  # Let the server fully start first
+
+        # Seed demo data if needed
+        if os.environ.get("SEED_DEMO_DATA") == "true":
             try:
-                _sp.run(
-                    ["python3", "scripts/ingest_bridge_guide.py"],
-                    cwd=_backend_dir,
-                    check=True,
+                import asyncio, subprocess
+                result = subprocess.run(
+                    ["python3", "-c",
+                     "import asyncio,sys; sys.path.insert(0,'.'); "
+                     "from database import async_session; from sqlalchemy import select,func; "
+                     "from models.analytics import QueryLog; "
+                     "async def check(): \n"
+                     "    async with async_session() as db:\n"
+                     "        r = await db.execute(select(func.count(QueryLog.id)))\n"
+                     "        return r.scalar() or 0\n"
+                     "count = asyncio.run(check()); print(count)"],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    capture_output=True, text=True, timeout=30,
                 )
-                print(f"Background ingestion complete: {knowledge_service.get_collection_count()} chunks")
-            except Exception as exc:
-                print(f"Background ingestion failed: {exc}")
-        threading.Thread(target=_ingest, daemon=True).start()
-    else:
-        print(f"Knowledge base ready: {knowledge_service.get_collection_count()} chunks")
+                log_count = int(result.stdout.strip() or "0")
+                if log_count < 10:
+                    subprocess.run(
+                        ["python3", "scripts/seed_historical_data_internal.py"],
+                        cwd=os.path.dirname(os.path.abspath(__file__)),
+                        timeout=120,
+                    )
+                    print("Demo data seeded")
+                else:
+                    print(f"Demo data present ({log_count} logs)")
+            except Exception as e:
+                print(f"Background seed skipped: {e}")
+
+        # Ingest knowledge base if empty
+        try:
+            from services.knowledge_service import knowledge_service
+            if knowledge_service.get_collection_count() == 0 and settings.GEMINI_API_KEY:
+                print("Knowledge base empty — ingesting in background...")
+                subprocess2 = __import__("subprocess")
+                subprocess2.run(
+                    ["python3", "scripts/ingest_bridge_guide.py"],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    timeout=300,
+                )
+                print("Knowledge base ingestion complete")
+        except Exception as e:
+            print(f"Background ingestion skipped: {e}")
+
+    threading.Thread(target=_background_startup, daemon=True).start()
+    print("Mission Navigator is ready ✓")
 
     yield
-    # Shutdown
+
     print("Mission Navigator shutting down")
 
 
