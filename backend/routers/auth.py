@@ -15,8 +15,16 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     """Authenticate staff and return JWT token."""
-    result = await db.execute(select(StaffUser).where(StaffUser.username == request.username))
-    user = result.scalar_one_or_none()
+    try:
+        result = await db.execute(select(StaffUser).where(StaffUser.username == request.username))
+        user = result.scalar_one_or_none()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database unavailable: {str(e)}",
+        )
 
     if not user or not verify_password(request.password, user.password_hash):
         raise HTTPException(

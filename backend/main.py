@@ -52,29 +52,41 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Schema migration skipped (non-fatal): {e}")
 
-    # 3. Auto-seed admin user
-    try:
-        from database import async_session
-        from sqlalchemy import select
-        from models.user import StaffUser
-        import bcrypt
-        async with async_session() as db:
-            result = await db.execute(select(StaffUser).where(StaffUser.username == settings.ADMIN_USERNAME))
-            if not result.scalar_one_or_none():
-                hashed = bcrypt.hashpw(settings.ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
-                admin = StaffUser(
-                    username=settings.ADMIN_USERNAME,
-                    password_hash=hashed,
-                    full_name="Administrator",
-                    role="admin",
-                )
-                db.add(admin)
-                await db.commit()
-                print(f"Admin user created")
-    except Exception as e:
-        print(f"Admin seed skipped (non-fatal): {e}")
+    # 3. Auto-seed admin user — retry so PostgreSQL has time to wake up
+    admin_seeded = False
+    for attempt in range(1, 6):
+        try:
+            from database import async_session
+            from sqlalchemy import select
+            from models.user import StaffUser
+            import bcrypt
+            async with async_session() as db:
+                result = await db.execute(select(StaffUser).where(StaffUser.username == settings.ADMIN_USERNAME))
+                existing = result.scalar_one_or_none()
+                if not existing:
+                    hashed = bcrypt.hashpw(settings.ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
+                    admin = StaffUser(
+                        username=settings.ADMIN_USERNAME,
+                        password_hash=hashed,
+                        full_name="Administrator",
+                        role="admin",
+                    )
+                    db.add(admin)
+                    await db.commit()
+                    print(f"Admin user created (attempt {attempt})")
+                else:
+                    print(f"Admin user exists (attempt {attempt})")
+                admin_seeded = True
+                break
+        except Exception as e:
+            print(f"Admin seed attempt {attempt}/5 failed: {e}")
+            if attempt < 5:
+                import asyncio
+                await asyncio.sleep(3)
+    if not admin_seeded:
+        print("WARNING: Admin user could not be seeded — login may fail")
 
-    # 4. Background tasks (seeding + ingestion) — never block startup
+    # 4. Background tasks (demo seeding + ingestion) — never block startup
     import threading
 
     def _background_startup():
